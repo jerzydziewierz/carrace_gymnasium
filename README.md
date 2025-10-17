@@ -1,9 +1,22 @@
-[![Python](https://img.shields.io/pypi/pyversions/gymnasium.svg)](https://badge.fury.io/py/gymnasium)
-[![PyPI](https://badge.fury.io/py/gymnasium.svg)](https://badge.fury.io/py/gymnasium)
-[![arXiv](https://img.shields.io/badge/arXiv-2407.17032-b31b1b.svg)](https://arxiv.org/abs/2407.17032)
-[![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit&logoColor=white)](https://pre-commit.com/)
-[![License](https://img.shields.io/github/license/Farama-Foundation/Gymnasium)](https://github.com/Farama-Foundation/Gymnasium/blob/main/LICENSE)
-[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+# What is this?
+
+George's for of OpenAI Gym (Gymnasium)
+
+in particular, the "car race" environment has been modified to support additional surface types (ice, grass, road) with different friction coefficients
+
+So that the car dynamics on ice can be demonstrated
+
+The car physics is modified slightly too
+
+some refactoring has been done, and more is on the way.
+
+
+Here is the original README.md content:
+
+---
+
+
+
 
 <p align="center">
     <a href="https://gymnasium.farama.org/" target = "_blank">

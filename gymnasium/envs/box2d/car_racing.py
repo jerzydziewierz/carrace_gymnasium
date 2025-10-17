@@ -9,7 +9,7 @@ from gymnasium import spaces
 from gymnasium.envs.box2d.car_dynamics import Car
 from gymnasium.error import DependencyNotInstalled, InvalidAction
 from gymnasium.utils import EzPickle
-
+from car_constants import *
 
 try:
     import Box2D
@@ -34,20 +34,21 @@ STATE_W = 96  # less than Atari 160x192
 STATE_H = 96
 VIDEO_W = 600
 VIDEO_H = 400
-WINDOW_W = 1000
-WINDOW_H = 800
+WINDOW_W = 3*1024
+WINDOW_H = 2*1024
 
-SCALE = 6.0  # Track scale
+SCALE = 9.0  # Track scale
 TRACK_RAD = 900 / SCALE  # Track is heavily morphed circle with this radius
 PLAYFIELD = 2000 / SCALE  # Game over boundary
 FPS = 50  # Frames per second
-ZOOM = 2.7  # Camera zoom
+ZOOM = 2  # Camera zoom
 ZOOM_FOLLOW = True  # Set to False for fixed view (don't use zoom)
+
 
 
 TRACK_DETAIL_STEP = 21 / SCALE
 TRACK_TURN_RATE = 0.31
-TRACK_WIDTH = 40 / SCALE
+TRACK_WIDTH = 55 / SCALE
 BORDER = 8 / SCALE
 BORDER_MIN_COUNT = 4
 GRASS_DIM = PLAYFIELD / 20.0
@@ -83,23 +84,26 @@ class FrictionDetector(contactListener):
             return
 
         # inherit tile color from env
-        tile.color[:] = self.env.road_color
+        if tile.gtype == TILETYPE_ROAD:
+            tile.color[:] = self.env.road_color
         if not obj or "tiles" not in obj.__dict__:
             return
         if begin:
             obj.tiles.add(tile)
-            if not tile.road_visited:
-                tile.road_visited = True
-                self.env.reward += 1000.0 / len(self.env.track)
-                self.env.tile_visited_count += 1
+            # handle road tile visited logic
+            if tile.gtype == TILETYPE_ROAD:
+                if not tile.road_visited:
+                    tile.road_visited = True
+                    self.env.reward += 1000.0 / len(self.env.track)
+                    self.env.tile_visited_count += 1
 
-                # Lap is considered completed if enough % of the track was covered
-                if (
-                    tile.idx == 0
-                    and self.env.tile_visited_count / len(self.env.track)
-                    > self.lap_complete_percent
-                ):
-                    self.env.new_lap = True
+                    # Lap is considered completed if enough % of the track was covered
+                    if (
+                        tile.idx == 0
+                        and self.env.tile_visited_count / len(self.env.track)
+                        > self.lap_complete_percent
+                    ):
+                        self.env.new_lap = True
         else:
             obj.tiles.remove(tile)
 
@@ -247,6 +251,12 @@ class CarRacing(gym.Env, EzPickle):
         self.fd_tile = fixtureDef(
             shape=polygonShape(vertices=[(0, 0), (1, 0), (1, -1), (0, -1)])
         )
+        self.ice_tile = fixtureDef(
+            shape=polygonShape(vertices=[(0, 0), (1, 0), (1, -1), (0, -1)])
+        )
+        self.grass_tile = fixtureDef(
+            shape=polygonShape(vertices=[(0, 0), (1, 0), (1, -1), (0, -1)])
+        )
 
         # This will throw a warning in tests/envs/test_envs in utils/env_checker.py as the space is not symmetric
         #   or normalised however this is not possible here so ignore
@@ -284,11 +294,13 @@ class CarRacing(gym.Env, EzPickle):
             self.grass_color = np.copy(self.bg_color)
             idx = self.np_random.integers(3)
             self.grass_color[idx] += 20
+            self.ice_color = np.array([ICE_COLOR[0], ICE_COLOR[1], ICE_COLOR[2]])
         else:
             # default colours
             self.road_color = np.array([102, 102, 102])
             self.bg_color = np.array([102, 204, 102])
             self.grass_color = np.array([102, 230, 102])
+            self.ice_color = np.array([ICE_COLOR[0], ICE_COLOR[1], ICE_COLOR[2]])
 
     def _reinit_colors(self, randomize):
         assert (
@@ -302,6 +314,7 @@ class CarRacing(gym.Env, EzPickle):
             self.bg_color = self.np_random.uniform(0, 210, size=3)
 
             self.grass_color = np.copy(self.bg_color)
+            self.ice_color = np.copy(self.bg_color)
             idx = self.np_random.integers(3)
             self.grass_color[idx] += 20
 
@@ -313,7 +326,8 @@ class CarRacing(gym.Env, EzPickle):
         for c in range(CHECKPOINTS):
             noise = self.np_random.uniform(0, 2 * math.pi * 1 / CHECKPOINTS)
             alpha = 2 * math.pi * c / CHECKPOINTS + noise
-            rad = self.np_random.uniform(TRACK_RAD / 3, TRACK_RAD)
+            #rad = self.np_random.uniform(TRACK_RAD / 3, TRACK_RAD)
+            rad = TRACK_RAD
 
             if c == 0:
                 alpha = 0
@@ -325,6 +339,7 @@ class CarRacing(gym.Env, EzPickle):
 
             checkpoints.append((alpha, rad * math.cos(alpha), rad * math.sin(alpha)))
         self.road = []
+
 
         # Go from one checkpoint to another to create track
         x, y, beta = 1.5 * TRACK_RAD, 0, 0
@@ -436,7 +451,7 @@ class CarRacing(gym.Env, EzPickle):
             for neg in range(BORDER_MIN_COUNT):
                 border[i - neg] |= border[i]
 
-        # Create tiles
+        # Create road tiles
         for i in range(len(track)):
             alpha1, beta1, x1, y1 = track[i]
             alpha2, beta2, x2, y2 = track[i - 1]
@@ -457,17 +472,19 @@ class CarRacing(gym.Env, EzPickle):
                 y2 + TRACK_WIDTH * math.sin(beta2),
             )
             vertices = [road1_l, road1_r, road2_r, road2_l]
+
             self.fd_tile.shape.vertices = vertices
-            t = self.world.CreateStaticBody(fixtures=self.fd_tile)
-            t.userData = t
-            c = 0.01 * (i % 3) * 255
-            t.color = self.road_color + c
-            t.road_visited = False
-            t.road_friction = 1.0
-            t.idx = i
-            t.fixtures[0].sensor = True
-            self.road_poly.append(([road1_l, road1_r, road2_r, road2_l], t.color))
-            self.road.append(t)
+            roadTile = self.world.CreateStaticBody(fixtures=self.fd_tile)            
+            roadTile.userData = roadTile
+            roadTile.gtype = TILETYPE_ROAD  # road
+            c = 0.05 * (i % 3) * 255
+            roadTile.color = self.road_color + c
+            roadTile.road_visited = False
+            roadTile.road_friction = FRICTION_BASE_ROAD
+            roadTile.idx = i
+            roadTile.fixtures[0].sensor = True
+            self.road_poly.append(([road1_l, road1_r, road2_r, road2_l], roadTile.color))
+            self.road.append(roadTile)
             if border[i]:
                 side = np.sign(beta2 - beta1)
                 b1_l = (
@@ -492,6 +509,56 @@ class CarRacing(gym.Env, EzPickle):
                         (255, 255, 255) if i % 2 == 0 else (255, 0, 0),
                     )
                 )
+
+        # add the outer
+        grass_size = PLAYFIELD * 2
+        grass_vertices = [
+            (-grass_size, -grass_size),
+            (grass_size, -grass_size),
+            (grass_size, grass_size),
+            (-grass_size, grass_size),
+        ]        
+        self.grass_tile.shape.vertices = grass_vertices
+        grassTile = self.world.CreateStaticBody(fixtures=self.grass_tile)
+        grassTile.userData = grassTile
+        grassTile.gtype = TILETYPE_GRASS  # grass
+        grassTile.color = self.grass_color
+        grassTile.road_friction = FRICTION_BASE_GRASS
+        grassTile.fixtures[0].sensor = True
+        grassTile.road_visited = False
+        grassTile.idx = -1
+        self.road.append(grassTile)
+
+
+
+
+        # Create ice patches: 
+        # Start: create ice patch every second checkpoint, starting with 1st: 
+        for checpoint_idx in range(0, len(checkpoints), 2):
+            if self.np_random.random() < 0.5:
+                # Create ice patch
+                icesize_width_right = TRACK_WIDTH * 2
+                icesize_width_left = TRACK_WIDTH * 0.5
+                icesize_length = TRACK_WIDTH * 3
+                first_checkpoint_location = checkpoints[checpoint_idx][1], checkpoints[checpoint_idx][2]
+                ice_vertices =[  (+icesize_width_right+first_checkpoint_location[0], -icesize_length+first_checkpoint_location[1]),
+                    (-icesize_width_left+first_checkpoint_location[0], -icesize_length+first_checkpoint_location[1]),
+                    (-icesize_width_left+first_checkpoint_location[0], icesize_length+first_checkpoint_location[1]),
+                    (+icesize_width_right+first_checkpoint_location[0], icesize_length+first_checkpoint_location[1]), ]
+                self.ice_tile.shape.vertices = ice_vertices
+                iceTile = self.world.CreateStaticBody(fixtures=self.ice_tile)
+                iceTile.userData = iceTile
+                iceTile.gtype = TILETYPE_ICE  # ice
+                iceTile.color = self.ice_color
+                iceTile.road_friction = FRICTION_BASE_ICE
+                iceTile.fixtures[0].sensor = True
+                iceTile.road_visited = False
+                iceTile.idx = -2
+                self.road.append(iceTile)
+                self.ice_poly.append((ice_vertices, iceTile.color))
+
+
+
         self.track = track
         return True
 
@@ -513,6 +580,7 @@ class CarRacing(gym.Env, EzPickle):
         self.t = 0.0
         self.new_lap = False
         self.road_poly = []
+        self.ice_poly = []
 
         if self.domain_randomize:
             randomize = True
@@ -618,7 +686,8 @@ class CarRacing(gym.Env, EzPickle):
         # computing transformations
         angle = -self.car.hull.angle
         # Animating first second zoom.
-        zoom = 0.1 * SCALE * max(1 - self.t, 0) + ZOOM * SCALE * min(self.t, 1)
+        #zoom = 0.1 * SCALE * max(1 - self.t, 0) + ZOOM * SCALE * min(self.t, 1)
+        zoom = ZOOM * SCALE
         scroll_x = -(self.car.hull.position[0]) * zoom
         scroll_y = -(self.car.hull.position[1]) * zoom
         trans = pygame.math.Vector2((scroll_x, scroll_y)).rotate_rad(angle)
@@ -695,6 +764,15 @@ class CarRacing(gym.Env, EzPickle):
             poly = [(p[0], p[1]) for p in poly]
             color = [int(c) for c in color]
             self._draw_colored_polygon(self.surf, poly, color, zoom, translation, angle)
+        
+        # draw ice
+        for poly, color in self.ice_poly:
+            # converting to pixel coordinates
+            poly = [(p[0], p[1]) for p in poly]
+            color = [int(c) for c in color]
+            #color = [255, 255, 255]
+            self._draw_colored_polygon(self.surf, poly, color, zoom, translation, angle)
+
 
     def _render_indicators(self, W, H):
         s = W / 40.0
@@ -781,8 +859,9 @@ class CarRacing(gym.Env, EzPickle):
             and (-MAX_SHAPE_DIM <= coord[1] <= WINDOW_H + MAX_SHAPE_DIM)
             for coord in poly
         ):
-            gfxdraw.aapolygon(self.surf, poly, color)
+            
             gfxdraw.filled_polygon(self.surf, poly, color)
+            gfxdraw.aapolygon(self.surf, poly, color)
 
     def _create_image_array(self, screen, size):
         scaled_screen = pygame.transform.smoothscale(screen, size)

@@ -14,7 +14,7 @@ import numpy as np
 
 from gymnasium.error import DependencyNotInstalled
 
-
+print(f'loading Car Dynamics module gymnasium.envs.box2d.car_dynamics')
 try:
     from Box2D.b2 import fixtureDef, polygonShape, revoluteJointDef
 except ImportError as e:
@@ -23,15 +23,22 @@ except ImportError as e:
     ) from e
 
 
+
 SIZE = 0.02
-ENGINE_POWER = 100000000 * SIZE * SIZE
+ENGINE_POWER = 0.75*100000000 * SIZE * SIZE
 WHEEL_MOMENT_OF_INERTIA = 4000 * SIZE * SIZE
 FRICTION_LIMIT = (
     1000000 * SIZE * SIZE
 )  # friction ~= mass ~= size^2 (calculated implicitly using density)
+BRAKE_FORCE = 30  # radians per second
+from car_constants import *
+
+
+print(f'FRICTION_LIMIT set to {FRICTION_LIMIT}')
 WHEEL_R = 27
 WHEEL_W = 14
 WHEELPOS = [(-55, +80), (+55, +80), (-55, -82), (+55, -82)]
+#WHEELPOS = [(-55, +80), (+55, +80), (-85, -82), (+85, -82)]
 HULL_POLY1 = [(-60, +130), (+60, +130), (+60, +110), (-60, +110)]
 HULL_POLY2 = [(-15, +120), (+15, +120), (+20, +20), (-20, 20)]
 HULL_POLY3 = [
@@ -48,6 +55,7 @@ HULL_POLY4 = [(-50, -120), (+50, -120), (+50, -90), (-50, -90)]
 WHEEL_COLOR = (0, 0, 0)
 WHEEL_WHITE = (77, 77, 77)
 MUD_COLOR = (102, 102, 0)
+
 
 
 class Car:
@@ -170,25 +178,49 @@ class Car:
         self.wheels[1].steer = s
 
     def step(self, dt):
-        for w in self.wheels:
+        for this_wheel in self.wheels:            
             # Steer each wheel
-            dir = np.sign(w.steer - w.joint.angle)
-            val = abs(w.steer - w.joint.angle)
-            w.joint.motorSpeed = dir * min(50.0 * val, 3.0)
+            dir = np.sign(this_wheel.steer - this_wheel.joint.angle)
+            val = abs(this_wheel.steer - this_wheel.joint.angle)
+            this_wheel.joint.motorSpeed = dir * min(50.0 * val, 3.0)
 
             # Position => friction_limit
-            grass = True
-            friction_limit = FRICTION_LIMIT * 0.6  # Grass friction if no tile
-            for tile in w.tiles:
-                friction_limit = max(
-                    friction_limit, FRICTION_LIMIT * tile.road_friction
-                )
-                grass = False
+            is_grass = False
+            is_ice = False
+            is_road = False
+
+            # friction_limit = FRICTION_LIMIT * 0.1  # Grass friction if no tile
+            friction_limit = FRICTION_LIMIT # start from very high friction, can be decreased by tiles below
+
+            print(f'Wheel at position {this_wheel.position} touching {len(this_wheel.tiles)} tiles')
+            for tile in this_wheel.tiles:                
+                if tile.gtype == TILETYPE_ROAD:  # road
+                    is_road = True
+                if tile.gtype == TILETYPE_GRASS:  # grass
+                    is_grass = True
+                if tile.gtype == TILETYPE_ICE:  # ice
+                    is_ice = True
+
+            if is_road:
+                is_grass = False # road has priority over grass         
+            
+            if is_ice:
+                is_grass = False
+                is_road = False # ice has priority over road and grass
+            
+            if not (is_road or is_grass or is_ice):
+                friction_limit = FRICTION_LIMIT * FRICTION_BASE_GRASS  # default to grass
+            elif is_road:
+                friction_limit = FRICTION_LIMIT * FRICTION_BASE_ROAD
+            elif is_grass:
+                friction_limit = FRICTION_LIMIT * FRICTION_BASE_GRASS
+            elif is_ice:
+                friction_limit = FRICTION_LIMIT * FRICTION_BASE_ICE
 
             # Force
-            forw = w.GetWorldVector((0, 1))
-            side = w.GetWorldVector((1, 0))
-            v = w.linearVelocity
+            forw = this_wheel.GetWorldVector((0, 1))
+            side = this_wheel.GetWorldVector((1, 0))
+            v = this_wheel.linearVelocity
             vf = forw[0] * v[0] + forw[1] * v[1]  # forward speed
             vs = side[0] * v[0] + side[1] * v[1]  # side speed
 
@@ -197,27 +229,27 @@ class Car:
             # domega = dt*W/WHEEL_MOMENT_OF_INERTIA/w.omega
 
             # add small coef not to divide by zero
-            w.omega += (
+            this_wheel.omega += (
                 dt
                 * ENGINE_POWER
-                * w.gas
+                * this_wheel.gas
                 / WHEEL_MOMENT_OF_INERTIA
-                / (abs(w.omega) + 5.0)
+                / (abs(this_wheel.omega) + 5.0)
             )
-            self.fuel_spent += dt * ENGINE_POWER * w.gas
+            self.fuel_spent += dt * ENGINE_POWER * this_wheel.gas
 
-            if w.brake >= 0.9:
-                w.omega = 0
-            elif w.brake > 0:
-                BRAKE_FORCE = 15  # radians per second
-                dir = -np.sign(w.omega)
-                val = BRAKE_FORCE * w.brake
-                if abs(val) > abs(w.omega):
-                    val = abs(w.omega)  # low speed => same as = 0
-                w.omega += dir * val
-            w.phase += w.omega * dt
+            if this_wheel.brake >= 0.9:
+                this_wheel.omega = 0
+            elif this_wheel.brake > 0:
 
-            vr = w.omega * w.wheel_rad  # rotating wheel speed
+                dir = -np.sign(this_wheel.omega)
+                val = BRAKE_FORCE * this_wheel.brake
+                if abs(val) > abs(this_wheel.omega):
+                    val = abs(this_wheel.omega)  # low speed => same as = 0
+                this_wheel.omega += dir * val
+            this_wheel.phase += this_wheel.omega * dt
+
+            vr = this_wheel.omega * this_wheel.wheel_rad  # rotating wheel speed
             f_force = -vf + vr  # force direction is direction of speed difference
             p_force = -vs
 
@@ -232,21 +264,21 @@ class Car:
             # Skid trace
             if abs(force) > 2.0 * friction_limit:
                 if (
-                    w.skid_particle
-                    and w.skid_particle.grass == grass
-                    and len(w.skid_particle.poly) < 30
+                    this_wheel.skid_particle
+                    and this_wheel.skid_particle.grass == is_grass
+                    and len(this_wheel.skid_particle.poly) < SKID_MARK_MEMORY_LENGTH
                 ):
-                    w.skid_particle.poly.append((w.position[0], w.position[1]))
-                elif w.skid_start is None:
-                    w.skid_start = w.position
+                    this_wheel.skid_particle.poly.append((this_wheel.position[0], this_wheel.position[1]))
+                elif this_wheel.skid_start is None:
+                    this_wheel.skid_start = this_wheel.position
                 else:
-                    w.skid_particle = self._create_particle(
-                        w.skid_start, w.position, grass
+                    this_wheel.skid_particle = self._create_particle(
+                        this_wheel.skid_start, this_wheel.position, is_grass, is_ice
                     )
-                    w.skid_start = None
+                    this_wheel.skid_start = None
             else:
-                w.skid_start = None
-                w.skid_particle = None
+                this_wheel.skid_start = None
+                this_wheel.skid_particle = None
 
             if abs(force) > friction_limit:
                 f_force /= force
@@ -255,9 +287,9 @@ class Car:
                 f_force *= force
                 p_force *= force
 
-            w.omega -= dt * f_force * w.wheel_rad / WHEEL_MOMENT_OF_INERTIA
+            this_wheel.omega -= dt * f_force * this_wheel.wheel_rad / WHEEL_MOMENT_OF_INERTIA
 
-            w.ApplyForceToCenter(
+            this_wheel.ApplyForceToCenter(
                 (
                     p_force * side[0] + f_force * forw[0],
                     p_force * side[1] + f_force * forw[1],
@@ -279,8 +311,9 @@ class Car:
                     for coords in poly
                 ]
                 pygame.draw.lines(
-                    surface, color=p.color, points=poly, width=2, closed=False
+                    surface, color=p.color, points=poly, width=int(WHEEL_W/2), closed=False
                 )
+
 
         for obj in self.drawlist:
             for f in obj.fixtures:
@@ -334,15 +367,17 @@ class Car:
                 ]
                 pygame.draw.polygon(surface, color=WHEEL_WHITE, points=white_poly)
 
-    def _create_particle(self, point1, point2, grass):
+    def _create_particle(self, point1, point2, is_grass, is_ice=False):
         class Particle:
             pass
 
         p = Particle()
-        p.color = WHEEL_COLOR if not grass else MUD_COLOR
+        p.color = WHEEL_COLOR if not is_grass else MUD_COLOR
+        if is_ice:
+            p.color = ICE_COLOR
         p.ttl = 1
         p.poly = [(point1[0], point1[1]), (point2[0], point2[1])]
-        p.grass = grass
+        p.grass = is_grass or is_ice
         self.particles.append(p)
         while len(self.particles) > 30:
             self.particles.pop(0)
