@@ -30,12 +30,7 @@ except ImportError as e:
     ) from e
 
 
-STATE_W = 96  # less than Atari 160x192
-STATE_H = 96
-VIDEO_W = 600
-VIDEO_H = 400
-WINDOW_W = 3*1024
-WINDOW_H = 2*1024
+
 
 SCALE = 9.0  # Track scale
 TRACK_RAD = 900 / SCALE  # Track is heavily morphed circle with this radius

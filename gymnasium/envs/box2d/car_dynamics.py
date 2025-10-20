@@ -142,6 +142,8 @@ class Car:
             w.joint = self.world.CreateJoint(rjd)
             w.tiles = set()
             w.userData = w
+            w.wx = wx 
+            w.wy = wy
             self.wheels.append(w)
         self.drawlist = self.wheels + [self.hull]
         self.particles = []
@@ -179,10 +181,12 @@ class Car:
 
     def step(self, dt):
         for this_wheel in self.wheels:            
-            # Steer each wheel
+            # Steer each wheel            
             dir = np.sign(this_wheel.steer - this_wheel.joint.angle)
             val = abs(this_wheel.steer - this_wheel.joint.angle)
-            this_wheel.joint.motorSpeed = dir * min(50.0 * val, 3.0)
+            STEER_MOTOR_SPEED = 2.0  # how fast the steering wheel turns
+            this_wheel.joint.motorSpeed = dir * min(50.0 * val, STEER_MOTOR_SPEED)
+            
 
             # Position => friction_limit
             is_grass = False
@@ -192,7 +196,7 @@ class Car:
             # friction_limit = FRICTION_LIMIT * 0.1  # Grass friction if no tile
             friction_limit = FRICTION_LIMIT # start from very high friction, can be decreased by tiles below
 
-            print(f'Wheel at position {this_wheel.position} touching {len(this_wheel.tiles)} tiles')
+            # print(f'Wheel at position {this_wheel.position} touching {len(this_wheel.tiles)} tiles')
             for tile in this_wheel.tiles:                
                 if tile.gtype == TILETYPE_ROAD:  # road
                     is_road = True
@@ -216,6 +220,7 @@ class Car:
                 friction_limit = FRICTION_LIMIT * FRICTION_BASE_GRASS
             elif is_ice:
                 friction_limit = FRICTION_LIMIT * FRICTION_BASE_ICE
+                # print(f'  -> on ICE! friction_limit={friction_limit}')
 
             # Force
             forw = this_wheel.GetWorldVector((0, 1))
@@ -236,6 +241,7 @@ class Car:
                 / WHEEL_MOMENT_OF_INERTIA
                 / (abs(this_wheel.omega) + 5.0)
             )
+            this_wheel.omega *= (1.0 - TIRE_TRACTION_LINEAR_FRICTION)
             self.fuel_spent += dt * ENGINE_POWER * this_wheel.gas
 
             if this_wheel.brake >= 0.9:
@@ -280,6 +286,7 @@ class Car:
                 this_wheel.skid_start = None
                 this_wheel.skid_particle = None
 
+            this_wheel.friction_limit = friction_limit  # for debug visualisation
             if abs(force) > friction_limit:
                 f_force /= force
                 p_force /= force
@@ -296,9 +303,30 @@ class Car:
                 ),
                 True,
             )
+            # save the p_force and f_force for visualisation later
+            this_wheel.f_force = f_force
+            this_wheel.p_force = p_force
 
     def draw(self, surface, zoom, translation, angle, draw_particles=True):
         import pygame.draw
+
+        # draw wheel forces
+        cx = 256
+        cy = 512
+        force_scale = 0.15
+        for wheel in self.wheels:            
+            if hasattr(wheel, 'f_force') and hasattr(wheel, 'p_force'):                
+                pygame.draw.circle(surface, color=(0,0,0), center=(cx+wheel.wx, cy+wheel.wy), radius=force_scale*wheel.friction_limit, width=1)
+                pygame.draw.circle(surface, color=(0, 0, 255), center=(cx+wheel.wx, cy+wheel.wy), radius=5)
+                pygame.draw.line(surface, color=(255, 0, 0), start_pos=(cx+wheel.wx, cy+wheel.wy), end_pos=(cx+force_scale*wheel.p_force+wheel.wx, cy+force_scale*wheel.f_force+wheel.wy), width=4)
+                # if force is nearly as big as the friction limit, draw a red warning circle to indicate skidding
+                current_force = np.sqrt(wheel.f_force**2 + wheel.p_force**2)
+                if current_force > wheel.friction_limit*0.7:
+                    pygame.draw.circle(surface, color=(255,0,0), center=(cx+wheel.wx, cy+wheel.wy), radius=current_force*force_scale, width=5)
+                    
+
+                
+
 
         if draw_particles:
             for p in self.particles:
